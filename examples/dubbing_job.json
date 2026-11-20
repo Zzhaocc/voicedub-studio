@@ -1,0 +1,6 @@
+{
+  "title": "视频配音",
+  "media_id": "替换为 GET /api/media 返回的 id",
+  "script": "这是一段自动生成的配音。先合成语音，再按原视频时长做时间伸缩，最后替换音轨。",
+  "voice_id": "替换为 GET /api/voices 返回的 id"
+}

@@ -1,0 +1,66 @@
+### VoiceDub Studio · API 示例
+
+@baseUrl = http://127.0.0.1:8000
+@voiceId = 替换为真实音色 id
+@mediaId = 替换为真实素材 id
+@jobId = 替换为真实任务 id
+
+### 健康检查
+GET {{baseUrl}}/api/health
+
+### 目录（音色 / 素材 / 示例文案）
+GET {{baseUrl}}/api/catalog
+
+### 声音设计
+POST {{baseUrl}}/api/voices/design
+Content-Type: application/json
+
+< ./voice_design.json
+
+### 音色试听（浏览器直接打开）
+GET {{baseUrl}}/api/voices/{{voiceId}}/preview
+
+### 克隆音色（不传音频时用内置样本）
+POST {{baseUrl}}/api/voices/clone
+Content-Type: application/json
+
+{"name": "示例克隆音色"}
+
+### 多角色对白
+POST {{baseUrl}}/api/jobs/dialogue
+Content-Type: application/json
+
+< ./dialogue_job.json
+
+### 视频配音
+POST {{baseUrl}}/api/jobs/dubbing
+Content-Type: application/json
+
+< ./dubbing_job.json
+
+### 有声书
+POST {{baseUrl}}/api/jobs/audiobook
+Content-Type: application/json
+
+< ./audiobook_job.json
+
+### 任务详情
+GET {{baseUrl}}/api/jobs/{{jobId}}
+
+### 取消 / 重试
+POST {{baseUrl}}/api/jobs/{{jobId}}/cancel
+
+###
+POST {{baseUrl}}/api/jobs/{{jobId}}/retry
+
+### 下载产物（?inline=1 预览）
+GET {{baseUrl}}/api/assets/替换为产物id?inline=1
+
+### 指标
+GET {{baseUrl}}/api/metrics
+
+### 契约校验：空剧本 422
+POST {{baseUrl}}/api/jobs/dialogue
+Content-Type: application/json
+
+{"script": "  "}

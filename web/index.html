@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VoiceDub Studio · AI 配音工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f59e0b'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='14' fill='%23120b02' text-anchor='middle'%3EVD%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">VD</div>
+      <div><div class="brand-title">VoiceDub</div><div class="brand-sub">Studio · 配音工作台</div></div>
+    </div>
+    <div class="health" id="health"><span class="dot pending"></span>
+      <div><div class="health-title">正在连接</div><div class="health-sub">/api/health</div></div></div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="studio"><span class="ico">◎</span>配音台</button>
+      <button class="nav-item" data-view="voices"><span class="ico">◍</span>音色库</button>
+      <button class="nav-item" data-view="jobs"><span class="ico">≡</span>任务</button>
+      <button class="nav-item" data-view="metrics"><span class="ico">◔</span>指标</button>
+    </nav>
+    <div class="side-foot">
+      <div class="side-title">本地引擎</div>
+      <div class="side-body" id="engine">local-engine · ffmpeg</div>
+      <div class="side-note">无需 GPU / 无需权重</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- 配音台 -->
+    <section class="view" id="view-studio">
+      <header class="page-head">
+        <div>
+          <div class="eyebrow">STUDIO / DUB</div>
+          <h1>把文字变成声音，再配到画面上</h1>
+          <p class="sub">多角色对白、视频配音（自动对齐时长）、有声书（分章 + 章节清单）。</p>
+        </div>
+        <div class="head-actions"><button class="btn btn-ghost" id="btn-refresh">刷新</button></div>
+      </header>
+
+      <div class="tabs" id="mode-tabs">
+        <button class="tab active" data-mode="dialogue">多角色对白</button>
+        <button class="tab" data-mode="dubbing">视频配音</button>
+        <button class="tab" data-mode="audiobook">有声书</button>
+      </div>
+
+      <div class="studio-grid">
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title" id="form-title">对白剧本</span>
+            <span class="muted small" id="form-hint">用 [角色] 或 角色： 开头</span></div>
+
+          <div id="form-dialogue" class="mode-form">
+            <label class="field"><span>标题</span><input id="dlg-title" type="text" value="多角色对白"></label>
+            <label class="field"><span>剧本</span>
+              <textarea id="dlg-script" rows="10" spellcheck="false"></textarea></label>
+            <div class="form-grid three">
+              <label class="field"><span>林夕 音色</span><select id="dlg-v1"></select></label>
+              <label class="field"><span>周野 音色</span><select id="dlg-v2"></select></label>
+              <label class="field"><span>旁白 音色</span><select id="dlg-v3"></select></label>
+            </div>
+            <div class="form-actions"><button class="btn btn-primary" id="btn-dialogue">生成对白</button></div>
+          </div>
+
+          <div id="form-dubbing" class="mode-form hidden">
+            <label class="field"><span>标题</span><input id="dub-title" type="text" value="视频配音"></label>
+            <label class="field"><span>源视频</span><select id="dub-media"></select></label>
+            <label class="field"><span>配音文案</span><textarea id="dub-script" rows="8" spellcheck="false"></textarea></label>
+            <div class="form-grid two">
+              <label class="field"><span>音色</span><select id="dub-voice"></select></label>
+              <label class="field field-note"><span>说明</span><div class="note">合成后按原视频时长做 atempo 伸缩，再替换音轨</div></label>
+            </div>
+            <div class="form-actions"><button class="btn btn-primary" id="btn-dubbing">生成配音视频</button></div>
+          </div>
+
+          <div id="form-audiobook" class="mode-form hidden">
+            <label class="field"><span>书名</span><input id="book-title" type="text" value="有声书 · 试听"></label>
+            <label class="field"><span>章节（用 ## 标题 分隔章节）</span>
+              <textarea id="book-chapters" rows="10" spellcheck="false"></textarea></label>
+            <div class="form-grid two">
+              <label class="field"><span>音色</span><select id="book-voice"></select></label>
+              <label class="field field-note"><span>输出</span><div class="note">全书音频 + 字幕 + chapters.json</div></label>
+            </div>
+            <div class="form-actions"><button class="btn btn-primary" id="btn-audiobook">生成有声书</button></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">当前任务</span><span class="pill" id="job-status">空闲</span></div>
+          <div id="job-body" class="job-body">
+            <div class="empty"><div class="empty-mark">◎</div><div class="empty-title">还没有任务</div>
+              <div class="empty-desc">选一个模式，填入文案，点生成。</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel mt">
+        <div class="panel-head"><span class="panel-title">最近任务</span></div>
+        <div id="recent" class="job-list"></div>
+      </div>
+    </section>
+
+    <!-- 音色库 -->
+    <section class="view hidden" id="view-voices">
+      <header class="page-head">
+        <div>
+          <div class="eyebrow">VOICES / DESIGN &amp; CLONE</div>
+          <h1>音色库</h1>
+          <p class="sub">用一句话描述你想要的音色，或者上传几秒参考音频做克隆。</p>
+        </div>
+        <div class="head-actions"><button class="btn btn-ghost" id="btn-clone">克隆音色</button></div>
+      </header>
+
+      <div class="design-panel panel">
+        <div class="panel-head"><span class="panel-title">声音设计</span>
+          <span class="muted small">例：低沉的中年男声，语速偏慢</span></div>
+        <div class="design-row">
+          <input id="design-desc" type="text" placeholder="描述你想要的音色…">
+          <button class="btn btn-primary" id="btn-design">生成音色</button>
+        </div>
+        <div class="design-result" id="design-result"></div>
+      </div>
+
+      <div class="voice-grid" id="voice-grid"></div>
+    </section>
+
+    <!-- 任务 -->
+    <section class="view hidden" id="view-jobs">
+      <header class="page-head">
+        <div><div class="eyebrow">JOBS / QUEUE</div><h1>任务队列</h1>
+          <p class="sub">单 worker 顺序执行，支持取消与重试。</p></div>
+        <div class="head-actions"><button class="btn btn-ghost" id="btn-jobs-refresh">刷新</button></div>
+      </header>
+      <div class="panel"><div id="jobs-table"></div></div>
+    </section>
+
+    <!-- 指标 -->
+    <section class="view hidden" id="view-metrics">
+      <header class="page-head">
+        <div><div class="eyebrow">METRICS</div><h1>运行指标</h1><p class="sub">任务成功率、平均耗时、音频时长与音色库规模。</p></div>
+        <div class="head-actions"><button class="btn btn-ghost" id="btn-metrics-refresh">刷新</button></div>
+      </header>
+      <div class="metric-grid" id="metric-grid"></div>
+      <div class="panel mt"><div id="metrics-recent"></div></div>
+    </section>
+  </main>
+</div>
+<audio id="player" preload="none"></audio>
+<div class="toast-stack" id="toast-stack"></div>
+<div id="modal-root"></div>
+<script src="./app.js" defer></script>
+</body>
+</html>
