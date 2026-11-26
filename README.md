@@ -3,12 +3,12 @@
 > 一句话描述出一个音色，写完稿子就得到成品：多角色对白、视频配音、有声书。
 > 服务端可运行，内置离线语音引擎，**不需要 GPU、模型权重或 API key**。
 
-[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square)]()
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square)]()
-[![FFmpeg](https://img.shields.io/badge/FFmpeg-7.1-007808?style=flat-square)]()
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.13-3776AB?style=flat-square)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square)](https://fastapi.tiangolo.com/)
+[![FFmpeg](https://img.shields.io/badge/FFmpeg-7.1-007808?style=flat-square)](https://ffmpeg.org/)
 [![CI](https://github.com/Zzhaocc/voicedub-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/Zzhaocc/voicedub-studio/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-25%20passed-brightgreen?style=flat-square)]()
-[![License](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-35%20passed-brightgreen?style=flat-square)]()
+[![License](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)](LICENSE)
 
 **仓库**：<https://github.com/Zzhaocc/voicedub-studio>
 
@@ -28,7 +28,7 @@
 | 多角色对白 | `[角色] 台词` 解析 → 逐句合成 → 按角色拼接 → 带说话人的 SRT |
 | 视频配音 | 合成 → **atempo 对齐原视频时长** → 替换音轨 → 输出可播放 MP4 |
 | 有声书 | 章节 → 逐章合成 → 全书音频 + 字幕 + `chapters.json`（章节起止时间） |
-| 任务系统 | 单 worker 队列、步骤级进度、协作式取消、重试、崩溃恢复 |
+| 任务系统 | 线程池队列、步骤级进度、协作式取消、重试、崩溃恢复、ffmpeg 超时 |
 
 **产出是真的**：24kHz WAV、标准 SRT、H.264/AAC MP4，播放器直接能放。
 
@@ -36,20 +36,36 @@
 
 ## 30 秒跑起来
 
+唯一的外部依赖是 **ffmpeg**（`ffmpeg -version` 能跑即可）。
+
+### Docker（推荐，镜像已含 ffmpeg）
+
 ```bash
-cd VoiceDub-Studio
+git clone https://github.com/Zzhaocc/voicedub-studio.git
+cd voicedub-studio
+docker compose up -d --build
+```
+
+打开 <http://127.0.0.1:8000>。数据落在具名卷 `studio-data`，`docker compose down` 不会丢。
+
+### 本地
+
+```bash
+git clone https://github.com/Zzhaocc/voicedub-studio.git
+cd voicedub-studio
 pip install -r requirements.txt
 python -m uvicorn app.main:app --port 8000
 ```
 
-打开 <http://127.0.0.1:8000>，三种模式都有预填示例，点按钮即可生成。
+Windows 也可以直接双击 `start.bat`，或运行 `.\scripts\run.ps1 -Port 8000`。
+
+### 不启服务也能验证
 
 ```bash
-# 或者命令行跑完三条链路
-python scripts/demo.py
+python scripts/demo.py      # 对白 → 视频配音 → 有声书，打印每步耗时与产物
 ```
 
-依赖只有一个：`ffmpeg` 在 PATH 里。
+三种模式都有预填示例，打开控制台点按钮即可生成。
 
 ---
 
@@ -60,6 +76,8 @@ python scripts/demo.py
 | 视频配音（对齐时长） | 声音设计 |
 |---|---|
 | ![视频配音](docs/screenshots/console-dubbing.jpg) | ![音色库](docs/screenshots/console-voices.jpg) |
+
+更多截图见 [`docs/screenshots/`](docs/screenshots/)：任务列表、指标、有声书。
 
 ---
 
@@ -101,11 +119,12 @@ ffmpeg -i demo.mp4 -i voice_fit.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -sh
 ```text
             ┌────────────── 接入层 ──────────────┐
             │  REST /api · Web 控制台 · Swagger  │
+            │  CORS → X-Request-ID → 安全响应头  │
             └────────────────┬───────────────────┘
                              │
         ┌────────────────────▼─────────────────────┐
         │           任务队列 JobRunner              │
-        │ 单 worker · 步骤进度 · 取消 · 重试 · 恢复 │
+        │ 线程池 · 步骤进度 · 取消 · 重试 · 恢复    │
         └───────┬───────────────────────┬──────────┘
                 │                       │
       ┌─────────▼─────────┐   ┌─────────▼──────────┐
@@ -115,44 +134,43 @@ ffmpeg -i demo.mp4 -i voice_fit.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -sh
                 │                       │
       ┌─────────▼───────────────────────▼──────────┐
       │                 媒体层                       │
-      │ TTS(WAV) · 混音/伸缩/响度 · 字幕(SRT) · 混流  │
+      │ TTS(WAV) · 混音/伸缩 · 响度 · 字幕 · 混流    │
       └─────────────────────────────────────────────┘
 ```
 
 **边界**：管线只依赖 `synthesize / concat / mix_dialogue / fit_duration / replace_audio` 这几个函数，
 换真实 TTS（CosyVoice、IndexTTS）只需要替换 `app/media/tts.py`，其余不动。
 
----
-
-## 测试
-
-```bash
-python -m pytest -q     # 25 passed
-```
-
-- 媒体层 7 个：WAV 头与时长、静音拼接、对白时间轴、**时长伸缩（2× / 0.5×）**、响度归一、视频混流、封面
-- 管线 11 个：剧本解析三种写法、章节校验、声音设计关键词映射、三条链路端到端、取消与重试
-- API 7 个：契约校验（422/404/409）、音色试听、产物下载、指标
+分层细节、任务队列、失败模式与取舍见 [架构与设计决策](docs/ARCHITECTURE.md)。
 
 ---
 
-## 与参考项目的差异（如实说）
+## 配置
 
-| VoiceStudio | 本项目 |
-|---|---|
-| Electron 桌面端 + 真实模型（OmniVoice 等） | 服务端 FastAPI + 内置离线引擎 |
-| 声音克隆用神经网络音色嵌入 | 用参考音频的基频/过零率估算音色参数（可解释，但不是真克隆） |
-| 视频配音含翻译、口型 | 只做「换音轨 + 时长对齐 + 字幕」，不做口型 |
-| 646 种语言、模型管理器 | 只做中文，聚焦管线与工程 |
+全部通过环境变量注入，完整清单见 [`.env.example`](.env.example) 与 [运维手册](docs/OPERATIONS.md)。
 
-**没有做的事**：不下载模型权重、不做语音翻译、不做口型同步、不做桌面打包。
-这些是产品功能；本项目证明的是「配音生产可以工程化」。
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `VOICEDUB_DATA_DIR` | `./data` | 数据根目录，派生 `uploads/` `media/` `work/` |
+| `DATABASE_URL` | `sqlite:///./data/studio.db` | 换 PostgreSQL 只改这一行 |
+| `FFMPEG_BIN` / `FFPROBE_BIN` | `ffmpeg` / `ffprobe` | 可执行文件路径 |
+| `VOICEDUB_FFMPEG_TIMEOUT` | `300` | 单条 ffmpeg 命令超时（秒） |
+| `VOICEDUB_SAMPLE_RATE` | `24000` | 输出采样率，贯穿 TTS / 混音 / 抽音轨 |
+| `VOICEDUB_SEGMENT_GAP` / `VOICEDUB_CHAPTER_GAP` | `0.25` / `0.8` | 句间 / 章间静音 |
+| `VOICEDUB_MAX_WORKERS` | `1` | 队列并发 |
+| `CORS_ORIGINS` | `*` | 生产填具体域名 |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `text` | `json` 用于日志采集 |
+| `DOCS_ENABLED` | `true` | 生产建议关闭 `/docs` |
 
 ---
 
 ## API 示例
 
 ```bash
+# 探针
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/ready
+
 # 声音设计
 curl -X POST http://127.0.0.1:8000/api/voices/design \
   -H "Content-Type: application/json" \
@@ -174,26 +192,118 @@ curl -OJ http://127.0.0.1:8000/api/assets/{asset_id}
 ```
 
 完整接口见 [`docs/API.md`](docs/API.md)，可执行示例见 [`examples/api.http`](examples/api.http)。
+所有错误响应统一为 `{"detail": ..., "request_id": ...}`，排查时按 `request_id` 检索日志。
+
+---
+
+## 部署与运维
+
+```bash
+make install-dev     # 安装开发依赖（含测试与 ruff）
+make test            # 测试 + 覆盖率（需要 ffmpeg）
+make lint            # ruff 静态检查
+make smoke           # 对已启动的服务做端到端冒烟
+make docker-build    # 构建镜像（内含 ffmpeg）
+```
+
+- **探针**：`/api/health`（存活，不查库）、`/api/ready`（就绪：数据库 / ffmpeg / ffprobe / 数据目录可写）；
+- **日志**：`LOG_FORMAT=json` 接采集平台，按 `request_id` 关联一次请求；
+- **备份**：`sqlite3 data/studio.db ".backup ..."` + 打包 `data/media` 与 `data/uploads`；
+- **扩容**：队列是进程内线程池，多机需要换外部队列 + 对象存储；内置接口不带鉴权，对外必须置于网关之后。
+
+完整部署形态、故障排查表与上线检查清单见 [运维手册](docs/OPERATIONS.md)，
+安全边界与漏洞报告流程见 [SECURITY.md](SECURITY.md)。
+
+---
+
+## 测试
+
+```bash
+python -m pytest -q     # 35 passed
+```
+
+| 分组 | 数量 | 覆盖 |
+|---|---|---|
+| 媒体层 | 7 | WAV 头与时长、静音拼接、对白时间轴、**时长伸缩（2× / 0.5×）**、响度归一、视频混流、封面 |
+| 管线 | 11 | 剧本解析三种写法、章节校验、声音设计关键词映射、三条链路端到端、取消与重试 |
+| API | 7 | 契约校验（422/404/409）、音色试听、产物下载、指标 |
+| 平台 | 10 | 探针、request_id、安全响应头、错误契约、时间戳、配置解析、ffmpeg 路径与数据目录 |
+
+CI 在 push / PR 时跑 ruff + pytest（3.11 / 3.13，含真实 ffmpeg 编码）+ HTTP 冒烟，
+见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+
+---
+
+## 与参考项目的差异
+
+| VoiceStudio | 本项目 |
+|---|---|
+| Electron 桌面端 + 真实模型（OmniVoice 等） | 服务端 FastAPI + 内置离线引擎 |
+| 声音克隆用神经网络音色嵌入 | 用参考音频的基频/过零率估算音色参数（可解释，但不是真克隆） |
+| 视频配音含翻译、口型 | 只做「换音轨 + 时长对齐 + 字幕」，不做口型 |
+| 646 种语言、模型管理器 | 只做中文，聚焦管线与工程 |
+
+**没有做的事**：不下载模型权重、不做语音翻译、不做口型同步、不做桌面打包。
+这些是产品功能；本项目证明的是「配音生产可以工程化」。
+
+**已知边界**：内置 TTS 是确定性谐波合成，听起来像"电子人声"而不是真人；
+真实音质取决于替换进去的模型，而管线、队列、时长对齐、字幕链路完全一致。
 
 ---
 
 ## 目录
 
 ```text
-VoiceDub-Studio/
+voicedub-studio/
 ├── app/
-│   ├── main.py / config.py / db.py / models.py
-│   ├── api/              # REST 路由 + 请求模型
-│   ├── voices/           # 声音设计解析、克隆分析
-│   ├── pipeline/         # 剧本解析、三条渲染管线、任务队列
-│   └── media/            # TTS(WAV) · 混音/伸缩 · 字幕 · 视频混流
-├── web/                  # 单页控制台
-├── tests/                # 媒体 + 管线 + API
-├── scripts/              # demo / 冒烟 / 截图
-├── examples/             # curl / .http
-└── docs/                 # 架构、API、截图
+│   ├── main.py                  # 应用装配、中间件、启动自检、崩溃恢复
+│   ├── config.py                # 环境变量配置（单一数据根目录）
+│   ├── logging.py               # 结构化日志 + request_id 注入
+│   ├── middleware.py            # 请求关联 ID、访问日志、安全响应头
+│   ├── errors.py                # 统一错误响应
+│   ├── db.py / models.py        # SQLAlchemy 模型（Voice/Media/Job/JobStep/Asset）
+│   ├── api/                     # REST 路由 + 请求模型
+│   ├── voices/                  # 声音设计解析、克隆分析
+│   ├── pipeline/                # 剧本解析、三条渲染管线、任务队列
+│   └── media/                   # TTS(WAV) · 混音/伸缩 · 字幕 · 视频混流
+├── web/                         # 单页控制台
+├── tests/                       # 媒体 / 管线 / API / 平台（35 个）
+├── scripts/                     # demo / 冒烟 / 截图
+├── examples/                    # curl / .http
+├── docs/                        # 架构、API、运维手册、截图
+├── Dockerfile                   # 多阶段构建，内置 ffmpeg、非 root
+├── docker-compose.yml
+└── Makefile                     # install / run / test / lint / smoke / docker-*
 ```
 
-## License
+---
 
-MIT
+## Roadmap
+
+| 版本 | 内容 |
+|---|---|
+| v0.5（当前） | 生产化加固：结构化日志与 request_id、探针、统一错误契约、容器化、运维与安全文档 |
+| v0.6 | 真实 TTS 适配器（CosyVoice / IndexTTS），保留 `synthesize` 契约 |
+| v0.7 | 对象存储与产物签名 URL；任务中间文件自动清理 |
+| v0.8 | 外部队列 + 多副本；长文案分片与断点续跑 |
+| v0.9 | 音色向量（真实克隆）与试听 A/B 对比 |
+
+变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
+## 文档
+
+- [架构与设计决策](docs/ARCHITECTURE.md) —— 分层、三条管线、队列、可观测、安全边界、取舍
+- [API 参考](docs/API.md) —— 全部端点、探针、错误契约与示例
+- [运维手册](docs/OPERATIONS.md) —— 部署形态、探针、日志排障、备份、扩容、上线清单
+- [安全策略](SECURITY.md) —— 安全边界与漏洞报告流程
+- [贡献指南](CONTRIBUTING.md) —— 本地开发、PR 前必过的检查、如何接真实 TTS
+
+---
+
+## 致谢与许可
+
+- 产品形态参考 [VoiceStudio](https://github.com/debpalash/VoiceStudio)；
+- 示例素材是程序生成的占位视频，不含真实人物音频；
+- MIT License，见 [LICENSE](LICENSE)。

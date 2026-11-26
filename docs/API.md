@@ -1,15 +1,55 @@
 # API 参考
 
-Base URL：`http://127.0.0.1:8000`　交互文档：`/docs`
+Base URL：`http://127.0.0.1:8000`　交互文档：`/docs`（`DOCS_ENABLED=false` 时关闭）
 
 任务异步：`POST /api/jobs/*` 返回 `202 + job_id`，轮询 `GET /api/jobs/{id}`。
-错误码：`404` 资源不存在、`409` 状态冲突（预设音色不可删、任务未结束）、`410` 产物已清理、`422` 参数/剧本错误。
+
+**请求关联 ID**：每个响应都带 `X-Request-ID`（可用同名请求头透传上游值，最长 128 字符），
+同一条 ID 会出现在服务端所有相关日志里。
+
+**统一错误体**：
+
+```json
+{"detail": "任务不存在", "request_id": "9f2c1a7b3d10"}
+```
+
+`detail` 可能是字符串，也可能是结构化对象（字段级校验原因）。报障时请提供 `request_id`。
+
+| 状态码 | 含义 |
+|---|---|
+| `404` | 资源不存在（任务 / 音色 / 素材 / 产物） |
+| `409` | 状态冲突（预设音色不可删、任务未结束、任务已结束不可取消） |
+| `410` | 产物文件已被清理 |
+| `413` | 上传文件过大（base64 上限 60MB） |
+| `422` | 参数 / 剧本 / 声音描述错误，或请求体不合法 |
+| `503` | `/api/ready` 探测到依赖不可用 |
+
+## 探针
+
+`GET /api/health`（存活，不查库、不调 ffmpeg）：
+
+```json
+{
+  "status": "ok", "version": "0.5.0", "environment": "production",
+  "engine": "local-engine", "ffmpeg": "ffmpeg", "workers": 1,
+  "sample_rate": 24000, "database": "sqlite", "docs_enabled": false, "uptime_s": 1284.5
+}
+```
+
+`GET /api/ready`（就绪，检查数据库 / ffmpeg / ffprobe / 数据目录）：
+
+```json
+{"status": "ready", "checks": {"database": true, "ffmpeg": true, "ffprobe": true, "data_dir": true}, "version": "0.5.0"}
+```
+
+任一检查失败返回 `503` + `{"status": "degraded", ...}`。
 
 ## 端点
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | 健康检查 |
+| GET | `/api/health` | 存活探针 |
+| GET | `/api/ready` | 就绪探针（含 ffmpeg 与数据目录可写） |
 | GET | `/api/catalog` | 音色、素材、示例文案、说话人 |
 | GET/POST | `/api/voices` | 列表 / 手动新建 |
 | POST | `/api/voices/design` | 声音设计（中文描述 → 参数） |
@@ -23,7 +63,7 @@ Base URL：`http://127.0.0.1:8000`　交互文档：`/docs`
 | POST | `/api/jobs/audiobook` | 有声书 |
 | GET | `/api/jobs` / `/api/jobs/{id}` | 列表 / 详情（步骤 + 产物） |
 | POST | `/api/jobs/{id}/cancel` · `/retry` | 取消 / 重试 |
-| DELETE | `/api/jobs/{id}` | 删除任务与文件 |
+| DELETE | `/api/jobs/{id}` | 删除任务与文件（运行中需先取消） |
 | GET | `/api/assets/{id}` | 下载；`?inline=1` 预览 |
 | GET | `/api/metrics` | 指标 |
 
@@ -128,3 +168,34 @@ POST /api/media
   "library": {"voices": 4, "media": 1, "cloned": 0}
 }
 ```
+
+## 7. 错误响应示例
+
+业务校验失败（剧本为空、声音描述为空）：
+
+```json
+{"detail": "剧本为空", "request_id": "9f2c1a7b3d10"}
+```
+
+请求体本身不合法（缺必填字段 / 多传字段）：
+
+```json
+{
+  "detail": {
+    "message": "请求参数校验失败",
+    "errors": [
+      {"loc": ["body", "name"], "msg": "Field required", "type": "missing"},
+      {"loc": ["body", "nope"], "msg": "Extra inputs are not permitted", "type": "extra_forbidden"}
+    ]
+  },
+  "request_id": "9f2c1a7b3d10"
+}
+```
+
+未预期异常（不回显堆栈）：
+
+```json
+{"detail": "服务内部错误，请携带 request_id 反馈", "request_id": "9f2c1a7b3d10"}
+```
+
+任务失败不是 HTTP 错误：接口返回 `200`，任务体里 `status=failed`，原因在 `error` 与失败步骤的 `detail` 中。
