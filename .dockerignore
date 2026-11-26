@@ -1,0 +1,25 @@
+# 构建上下文瘦身：镜像里只需要 app / web / scripts / examples
+.git
+.github
+.gitignore
+.gitattributes
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+data
+docs
+tests
+*.md
+!README.md
+*.db
+*.db-wal
+*.db-shm
+*.log
+.editorconfig
+Makefile
+docker-compose.yml

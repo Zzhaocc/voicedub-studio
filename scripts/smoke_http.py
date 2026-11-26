@@ -1,6 +1,6 @@
 """对已启动的服务做端到端冒烟验证。
 
-    python scripts/smoke_http.py [port]
+python scripts/smoke_http.py [port]
 """
 
 from __future__ import annotations
@@ -35,8 +35,13 @@ def main() -> int:
     with httpx.Client(base_url=BASE, timeout=120.0, trust_env=False) as c:
         print(f"目标：{BASE}")
 
-        health = c.get("/api/health").json()
+        health_resp = c.get("/api/health")
+        health = health_resp.json()
         check("健康检查", health["status"] == "ok", health["engine"])
+        check("请求关联 ID", bool(health_resp.headers.get("X-Request-ID")), health_resp.headers.get("X-Request-ID", ""))
+        check("安全响应头", health_resp.headers.get("X-Content-Type-Options") == "nosniff")
+        ready = c.get("/api/ready")
+        check("就绪探针", ready.status_code == 200 and ready.json()["status"] == "ready", str(ready.status_code))
 
         catalog = c.get("/api/catalog").json()
         check("音色库", len(catalog["voices"]) >= 4, f"{len(catalog['voices'])} 个")
@@ -70,7 +75,12 @@ def main() -> int:
         media = catalog["media"][0]
         dubbing = c.post(
             "/api/jobs/dubbing",
-            json={"title": "冒烟 · 视频配音", "media_id": media["id"], "script": "这是一段冒烟测试配音。", "voice_id": voice_id},
+            json={
+                "title": "冒烟 · 视频配音",
+                "media_id": media["id"],
+                "script": "这是一段冒烟测试配音。",
+                "voice_id": voice_id,
+            },
         )
         check("创建视频配音", dubbing.status_code == 202, dubbing.text[:60])
         job = wait_job(c, dubbing.json()["job_id"])
@@ -78,8 +88,11 @@ def main() -> int:
         video = next((a for a in job["assets"] if a["kind"] == "video"), None)
         check("成片可下载", bool(video) and len(c.get(f"/api/assets/{video['id']}").content) > 20_000)
         if video:
-            check("时长对齐", abs((video.get("duration") or 0) - (job["output"].get("source_duration") or 0)) < 1.2,
-                  f"{video.get('duration')} vs {job['output'].get('source_duration')}")
+            check(
+                "时长对齐",
+                abs((video.get("duration") or 0) - (job["output"].get("source_duration") or 0)) < 1.2,
+                f"{video.get('duration')} vs {job['output'].get('source_duration')}",
+            )
 
         book = c.post(
             "/api/jobs/audiobook",

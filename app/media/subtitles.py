@@ -14,9 +14,7 @@ from pathlib import Path
 # 字幕正文最多回传 20000 字符，避免 API 响应体过大。
 MAX_RETURN_CHARS = 20000
 
-_TIMESTAMP_RE = re.compile(
-    r"(?P<hours>\d{1,3}):(?P<minutes>\d{2}):(?P<seconds>\d{2})[,.](?P<millis>\d{1,3})"
-)
+_TIMESTAMP_RE = re.compile(r"(?P<hours>\d{1,3}):(?P<minutes>\d{2}):(?P<seconds>\d{2})[,.](?P<millis>\d{1,3})")
 _ARROW_RE = re.compile(r"-->|—>")
 
 
@@ -76,10 +74,7 @@ def build_srt(segments: list[dict], out_path: Path) -> dict:
         if text:
             cues.append((len(cues) + 1, start, end, text))
 
-    blocks = [
-        f"{index}\n{format_ts(start)} --> {format_ts(end)}\n{text}"
-        for index, start, end, text in cues
-    ]
+    blocks = [f"{index}\n{format_ts(start)} --> {format_ts(end)}\n{text}" for index, start, end, text in cues]
     body = "\n\n".join(blocks)
     if body:
         body += "\n"

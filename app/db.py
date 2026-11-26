@@ -28,12 +28,17 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 
 def init_db() -> None:
+    """建表 + 打开 SQLite 的 WAL 与外部键约束。
+
+    WAL：前端轮询任务状态时不会锁库；外部键：删除任务时不会留下孤儿行。
+    """
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     if _settings.sqlite:
         with engine.connect() as conn:
             conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
 def get_db() -> Iterator[Session]:
@@ -42,6 +47,16 @@ def get_db() -> Iterator[Session]:
         yield db
     finally:
         db.close()
+
+
+def ping() -> bool:
+    """就绪探针用：确认连接池能拿到一条可用连接。"""
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        return True
+    except Exception:  # noqa: BLE001 —— 探针只关心可用性，不抛出
+        return False
 
 
 @contextmanager

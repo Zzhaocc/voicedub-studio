@@ -28,3 +28,8 @@ def prepared_db():
     init_db()
     seed_all()
     yield
+
+    # 收尾前等后台任务跑完：否则最后一个 job 的日志会落到已关闭的 stdout 上。
+    from app.pipeline.jobs import runner
+
+    runner.executor.shutdown(wait=True)

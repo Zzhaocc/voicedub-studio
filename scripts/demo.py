@@ -1,6 +1,6 @@
 """端到端演示：对白 → 视频配音 → 有声书。
 
-    python scripts/demo.py
+python scripts/demo.py
 """
 
 from __future__ import annotations
@@ -99,7 +99,8 @@ def main() -> int:
         },
     )
     if job.status == "succeeded":
-        print(f"  原视频 {job.output['source_duration']}s → 配音 {job.output['duration']}s（倍率 {job.output['fit_factor']}）")
+        output = job.output
+        print(f"  原视频 {output['source_duration']}s → 配音 {output['duration']}s（倍率 {output['fit_factor']}）")
         for asset in assets_of(job.id):
             print(f"    {asset.kind:<8} {asset.filename:<18} {asset.size_bytes:>8,} B")
 
@@ -111,7 +112,10 @@ def main() -> int:
             "voice_id": voice_id,
             "chapters": [
                 {"title": "第一章 · 声音的形状", "text": "每一种声音都有形状。低沉的声音像宽厚的木头。"},
-                {"title": "第二章 · 克隆与边界", "text": "克隆一段声音只需要几秒钟的样本。技术没有立场，使用它的人必须有。"},
+                {
+                    "title": "第二章 · 克隆与边界",
+                    "text": "克隆一段声音只需要几秒钟的样本。技术没有立场，使用它的人必须有。",
+                },
             ],
         },
     )
@@ -125,8 +129,11 @@ def main() -> int:
 
     with session_scope() as db:
         data = metrics_fn(db)
-    print(f"任务 {data['jobs']['total']} 个（成功 {data['jobs']['succeeded']}），平均 {data['jobs']['avg_duration_ms']} ms")
-    print(f"音频 {data['audio']['outputs']} 条 / {data['audio']['seconds']}s，产物 {data['audio']['total_bytes'] / 1024:.0f} KB")
+    jobs_meta = data["jobs"]
+    audio_meta = data["audio"]
+    print(f"任务 {jobs_meta['total']} 个（成功 {jobs_meta['succeeded']}），平均 {jobs_meta['avg_duration_ms']} ms")
+    total_kb = audio_meta["total_bytes"] / 1024
+    print(f"音频 {audio_meta['outputs']} 条 / {audio_meta['seconds']}s，产物 {total_kb:.0f} KB")
     print(f"音色库 {data['library']['voices']} 个，素材 {data['library']['media']} 个")
 
     print("\n启动控制台：python -m uvicorn app.main:app --port 8000")

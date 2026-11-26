@@ -91,7 +91,12 @@ def test_dubbing_job_via_api(client: TestClient) -> None:
     voice = client.get("/api/voices").json()["items"][0]
     created = client.post(
         "/api/jobs/dubbing",
-        json={"title": "接口配音", "media_id": media["id"], "script": "这是一段接口测试配音。", "voice_id": voice["id"]},
+        json={
+            "title": "接口配音",
+            "media_id": media["id"],
+            "script": "这是一段接口测试配音。",
+            "voice_id": voice["id"],
+        },
     )
     assert created.status_code == 202, created.text
     job = _wait_job(client, created.json()["job_id"])
@@ -126,7 +131,9 @@ def test_invalid_inputs(client: TestClient) -> None:
     assert client.post("/api/jobs/dialogue", json={"script": "  "}).status_code == 422
     assert client.post("/api/jobs/audiobook", json={"chapters": [], "voice_id": "x"}).status_code == 422
     assert client.post("/api/voices/design", json={"description": " "}).status_code == 422
-    assert client.post("/api/jobs/dubbing", json={"media_id": "nope", "script": "x", "voice_id": "y"}).status_code == 404
+    assert (
+        client.post("/api/jobs/dubbing", json={"media_id": "nope", "script": "x", "voice_id": "y"}).status_code == 404
+    )
 
 
 def test_metrics(client: TestClient) -> None:

@@ -83,6 +83,15 @@ def _validate_sample_rate(sample_rate: int) -> int:
     return sample_rate
 
 
+def _resolve_sample_rate(sample_rate: int | None) -> int:
+    """显式传入优先，否则用配置里的默认采样率（VOICEDUB_SAMPLE_RATE）。"""
+    if sample_rate is None:
+        from app.config import get_settings
+
+        sample_rate = get_settings().sample_rate
+    return _validate_sample_rate(int(sample_rate))
+
+
 def _char_seconds(char: str, speed: float) -> float:
     """单个字符在时间轴上占用的秒数。"""
     if char.isspace():
@@ -115,9 +124,7 @@ def _voice_segment(char: str, sample_count: int, sample_rate: int, voice: VoiceS
     for order, amplitude in enumerate(harmonics, start=1):
         if amplitude == 0.0:
             continue
-        signal += amplitude * np.sin(
-            2.0 * math.pi * f0 * order * t + phase * (1.0 + 0.37 * order)
-        ).astype(np.float32)
+        signal += amplitude * np.sin(2.0 * math.pi * f0 * order * t + phase * (1.0 + 0.37 * order)).astype(np.float32)
 
     # 轻微的 5.5 Hz 幅度颤音，避免长音听起来像合成器。
     signal *= (1.0 + 0.04 * np.sin(2.0 * math.pi * 5.5 * t + phase)).astype(np.float32)
@@ -190,21 +197,21 @@ def synthesize(
     text: str,
     out_path: Path,
     voice: VoiceSpec = VoiceSpec(),
-    sample_rate: int = 24000,
+    sample_rate: int | None = None,
 ) -> dict:
     """把文本合成为 mono 16-bit PCM WAV。
 
     :param text: 待合成文本；空白文本抛 ``ValueError``。
     :param out_path: 输出 WAV 路径（父目录会自动创建）。
     :param voice: 声音参数，默认 :class:`VoiceSpec`。
-    :param sample_rate: 采样率，默认 24000。
+    :param sample_rate: 采样率，缺省取配置 ``VOICEDUB_SAMPLE_RATE``（默认 24000）。
     :returns: ``{"path","duration","sample_rate","size_bytes","char_count","voice"}``。
     """
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text 不能为空或纯空白")
     if not isinstance(voice, VoiceSpec):
         raise ValueError("voice 必须是 VoiceSpec 实例")
-    sample_rate = _validate_sample_rate(sample_rate)
+    sample_rate = _resolve_sample_rate(sample_rate)
 
     raw = _render_samples(text, voice, sample_rate)
     audio = _finalize(raw, sample_rate)
@@ -248,12 +255,12 @@ def _read_pcm16_mono(path: Path, sample_rate: int) -> np.ndarray:
     return data
 
 
-def concat_wavs(paths: list[Path], out_path: Path, sample_rate: int = 24000) -> dict:
+def concat_wavs(paths: list[Path], out_path: Path, sample_rate: int | None = None) -> dict:
     """按顺序拼接多个 mono 16-bit WAV，相邻段之间插入 0.15 秒静音。
 
     :returns: ``{"path","duration","segments","size_bytes"}``。
     """
-    sample_rate = _validate_sample_rate(sample_rate)
+    sample_rate = _resolve_sample_rate(sample_rate)
     if not paths:
         raise ValueError("paths 不能为空")
 
@@ -287,7 +294,7 @@ def make_reference_sample(
     out_path: Path,
     seconds: float = 4.0,
     seed: int = 7,
-    sample_rate: int = 24000,
+    sample_rate: int | None = None,
 ) -> dict:
     """生成确定性的伪语音参考样本，用于演示"音色克隆"流程。
 
@@ -296,7 +303,7 @@ def make_reference_sample(
 
     :returns: 与 :func:`synthesize` 相同的键，另加 ``{"kind": "reference"}``。
     """
-    sample_rate = _validate_sample_rate(sample_rate)
+    sample_rate = _resolve_sample_rate(sample_rate)
     if seconds <= 0:
         raise ValueError("seconds 必须大于 0")
     if not isinstance(seed, int) or isinstance(seed, bool):

@@ -122,4 +122,4 @@ def analyze_reference(path: Path) -> dict[str, Any]:
 def guess_name(description: str) -> str:
     """从描述里截一个短名字，例如「低沉的中年男声」→「低沉的中年男声」。"""
     cleaned = re.sub(r"[\s，。,.!！?？]+", "", description or "")
-    return (cleaned[:12] or "自定义音色")
+    return cleaned[:12] or "自定义音色"

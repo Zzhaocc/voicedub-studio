@@ -1,6 +1,10 @@
 """音频处理：WAV 读写、静音拼接、对白混音、时长对齐、响度归一。
 
 全部基于标准库 `wave` + numpy；时间伸缩与响度归一调 ffmpeg。
+
+ffmpeg / ffprobe 的可执行路径、默认采样率、命令超时全部来自配置
+（``FFMPEG_BIN`` / ``VOICEDUB_SAMPLE_RATE`` / ``VOICEDUB_FFMPEG_TIMEOUT``），
+所以换镜像、换端口、加超时都不需要改代码。
 """
 
 from __future__ import annotations
@@ -12,7 +16,35 @@ from typing import Any
 
 import numpy as np
 
-FFMPEG = "ffmpeg"
+from app.config import get_settings
+
+
+def ffmpeg_bin() -> str:
+    """当前生效的 ffmpeg 路径（每次读取，便于测试与容器覆盖）。"""
+    return get_settings().ffmpeg
+
+
+def default_sample_rate(explicit: int | None = None) -> int:
+    """显式传入优先，否则用配置里的默认采样率。"""
+    return int(explicit) if explicit else get_settings().sample_rate
+
+
+def _run(cmd: list[str]) -> None:
+    """执行 ffmpeg/ffprobe；超时与非零退出都转换成可读错误。"""
+    timeout = get_settings().ffmpeg_timeout
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{Path(cmd[0]).name} 执行超时（>{timeout:.0f}s）") from exc
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "")[-800:])
 
 
 def wav_info(path: Path) -> dict[str, Any]:
@@ -72,27 +104,28 @@ def concat_with_gaps(
     paths: list[Path],
     out_path: Path,
     gap: float = 0.3,
-    sample_rate: int = 24000,
+    sample_rate: int | None = None,
 ) -> dict[str, Any]:
     if not paths:
         raise ValueError("没有可拼接的音频")
 
-    silence = np.zeros(max(0, int(round(gap * sample_rate))), dtype=np.float32)
+    rate = default_sample_rate(sample_rate)
+    silence = np.zeros(max(0, int(round(gap * rate))), dtype=np.float32)
     chunks: list[np.ndarray] = []
     for index, path in enumerate(paths):
         if index:
             chunks.append(silence)
-        chunks.append(_read_mono(Path(path), sample_rate))
+        chunks.append(_read_mono(Path(path), rate))
 
     merged = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
     out_path = Path(out_path)
-    size = _write_mono(out_path, merged, sample_rate)
+    size = _write_mono(out_path, merged, rate)
     return {
         "path": str(out_path),
-        "duration": round(len(merged) / sample_rate, 3),
+        "duration": round(len(merged) / rate, 3),
         "segments": len(paths),
         "size_bytes": size,
-        "sample_rate": sample_rate,
+        "sample_rate": rate,
     }
 
 
@@ -100,7 +133,7 @@ def mix_dialogue(
     segments: list[dict],
     out_path: Path,
     gap: float = 0.25,
-    sample_rate: int = 24000,
+    sample_rate: int | None = None,
 ) -> dict[str, Any]:
     """把多段对白按顺序拼起来，并返回带角色的时间轴。"""
     if not segments:
@@ -109,7 +142,8 @@ def mix_dialogue(
         if "path" not in segment or "text" not in segment:
             raise ValueError("每段台词都需要 path 与 text")
 
-    silence = np.zeros(max(0, int(round(gap * sample_rate))), dtype=np.float32)
+    rate = default_sample_rate(sample_rate)
+    silence = np.zeros(max(0, int(round(gap * rate))), dtype=np.float32)
     chunks: list[np.ndarray] = []
     timeline: list[dict[str, Any]] = []
     cursor = 0.0
@@ -118,9 +152,9 @@ def mix_dialogue(
         if index:
             chunks.append(silence)
             cursor += gap
-        data = _read_mono(Path(segment["path"]), sample_rate)
+        data = _read_mono(Path(segment["path"]), rate)
         chunks.append(data)
-        duration = len(data) / sample_rate
+        duration = len(data) / rate
         timeline.append(
             {
                 "start": round(cursor, 3),
@@ -133,20 +167,14 @@ def mix_dialogue(
 
     merged = np.concatenate(chunks)
     out_path = Path(out_path)
-    size = _write_mono(out_path, merged, sample_rate)
+    size = _write_mono(out_path, merged, rate)
     return {
         "path": str(out_path),
-        "duration": round(len(merged) / sample_rate, 3),
+        "duration": round(len(merged) / rate, 3),
         "segments": len(segments),
         "size_bytes": size,
         "timeline": timeline,
     }
-
-
-def _run(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or "")[-800:])
 
 
 def fit_duration(
@@ -155,10 +183,12 @@ def fit_duration(
     target_seconds: float,
     min_factor: float = 0.5,
     max_factor: float = 2.0,
+    sample_rate: int | None = None,
 ) -> dict[str, Any]:
     """用 atempo 把音频伸缩到目标时长（factor = 原时长 / 目标时长）。"""
     if target_seconds <= 0:
         raise ValueError("目标时长必须大于 0")
+    rate = default_sample_rate(sample_rate)
     info = wav_info(src)
     raw_factor = info["duration"] / float(target_seconds)
     # atempo 单次只接受 0.5–2.0，超出就串联；这里只做安全边界，不做业务钳制
@@ -176,9 +206,16 @@ def fit_duration(
 
     _run(
         [
-            FFMPEG, "-y", "-i", str(src),
-            "-filter:a", ",".join(filters),
-            "-ac", "1", "-ar", "24000",
+            ffmpeg_bin(),
+            "-y",
+            "-i",
+            str(src),
+            "-filter:a",
+            ",".join(filters),
+            "-ac",
+            "1",
+            "-ar",
+            str(rate),
             str(out_path),
         ]
     )
@@ -192,12 +229,21 @@ def fit_duration(
     }
 
 
-def normalize_loudness(src: Path, out_path: Path, target_lufs: float = -16.0) -> dict[str, Any]:
+def normalize_loudness(
+    src: Path, out_path: Path, target_lufs: float = -16.0, sample_rate: int | None = None
+) -> dict[str, Any]:
+    rate = default_sample_rate(sample_rate)
     _run(
         [
-            FFMPEG, "-y", "-i", str(src),
-            "-filter:a", f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11",
-            "-ar", "24000", str(out_path),
+            ffmpeg_bin(),
+            "-y",
+            "-i",
+            str(src),
+            "-filter:a",
+            f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11",
+            "-ar",
+            str(rate),
+            str(out_path),
         ]
     )
     info = wav_info(out_path)

@@ -1,6 +1,6 @@
 """控制台截图（开发辅助）。
 
-    python scripts/screenshots.py
+python scripts/screenshots.py
 """
 
 from __future__ import annotations

@@ -1,18 +1,21 @@
 """持久化模型。
 
 四个实体：
-- Voice     音色（预设 / 声音设计 / 克隆）
+- Voice     音色（preset 预设 / designed 声音设计 / cloned 参考音频 / custom 手填参数）
 - Media     上传的源视频或音频
 - Job       一次配音任务（对白 / 视频配音 / 有声书）
 - Asset     产物（音频 / 字幕 / 视频 / 章节清单）
+
+Job 与 JobStep、Asset 是级联关系：删除任务即删除步骤与产物记录，
+文件清理由 ``DELETE /api/jobs/{id}`` 负责（先取消再删除）。
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -23,7 +26,7 @@ def new_id(prefix: str) -> str:
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Voice(Base):
@@ -31,7 +34,7 @@ class Voice(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("voi"))
     name: Mapped[str] = mapped_column(String(80))
-    kind: Mapped[str] = mapped_column(String(20), default="preset")  # preset|designed|cloned
+    kind: Mapped[str] = mapped_column(String(20), default="preset")  # preset|designed|cloned|custom
     pitch: Mapped[float] = mapped_column(Float, default=1.0)
     speed: Mapped[float] = mapped_column(Float, default=1.0)
     timbre: Mapped[str] = mapped_column(String(20), default="warm")
@@ -66,16 +69,16 @@ class Job(Base):
     input: Mapped[dict] = mapped_column(JSON, default=dict)
     output: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cancel_requested: Mapped[bool] = mapped_column(Integer, default=0)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    steps: Mapped[list["JobStep"]] = relationship(
+    steps: Mapped[list[JobStep]] = relationship(
         back_populates="job", cascade="all, delete-orphan", order_by="JobStep.seq"
     )
-    assets: Mapped[list["Asset"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    assets: Mapped[list[Asset]] = relationship(back_populates="job", cascade="all, delete-orphan")
 
 
 class JobStep(Base):
@@ -90,7 +93,7 @@ class JobStep(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
-    job: Mapped["Job"] = relationship(back_populates="steps")
+    job: Mapped[Job] = relationship(back_populates="steps")
 
 
 class Asset(Base):
@@ -107,4 +110,4 @@ class Asset(Base):
     duration: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
-    job: Mapped["Job"] = relationship(back_populates="assets")
+    job: Mapped[Job] = relationship(back_populates="assets")

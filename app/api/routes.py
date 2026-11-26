@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import base64
 import binascii
-from datetime import datetime
+import shutil
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from app import __version__
 from app.api.schemas import (
     AudiobookJobRequest,
     DialogueJobRequest,
@@ -23,7 +26,7 @@ from app.api.schemas import (
     VoiceDesignRequest,
 )
 from app.config import get_settings
-from app.db import get_db
+from app.db import get_db, ping
 from app.models import Asset, Job, Media, Voice, new_id
 from app.pipeline.jobs import runner
 from app.pipeline.script import normalize_chapters, parse_dialogue
@@ -36,7 +39,11 @@ router = APIRouter(prefix="/api")
 # 序列化
 # --------------------------------------------------------------------------- #
 def _dt(value: datetime | None) -> str | None:
-    return value.isoformat() + "Z" if value else None
+    """统一成 UTC ISO8601（带 Z）。SQLite 取回的是 naive datetime，按 UTC 处理。"""
+    if value is None:
+        return None
+    aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    return aware.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _voice_out(voice: Voice) -> dict[str, Any]:
@@ -115,19 +122,56 @@ def _job_out(job: Job, detail: bool = False) -> dict[str, Any]:
 # 元信息
 # --------------------------------------------------------------------------- #
 @router.get("/health", tags=["meta"])
-def health(db: Session = Depends(get_db)) -> dict[str, Any]:
+def health(request: Request) -> dict[str, Any]:
+    """存活探针：进程能响应即返回 200，不做数据库或 ffmpeg 检查。
+
+    容器 / K8s 的 livenessProbe 指这里；依赖是否可用看 ``/api/ready``。
+    """
     settings = get_settings()
-    running = db.scalar(select(func.count()).select_from(Job).where(Job.status == "running")) or 0
-    queued = db.scalar(select(func.count()).select_from(Job).where(Job.status == "queued")) or 0
+    started_at = getattr(request.app.state, "started_at", None)
     return {
         "status": "ok",
-        "version": settings.version,
+        "version": __version__,
+        "environment": settings.environment,
         "engine": "local-engine",
         "ffmpeg": settings.ffmpeg,
-        "running_jobs": running,
-        "queued_jobs": queued,
-        "workers": settings.max_workers,
+        "workers": max(1, settings.max_workers),
+        "sample_rate": settings.sample_rate,
+        "database": "sqlite" if settings.sqlite else "external",
+        "docs_enabled": settings.docs_enabled,
+        "uptime_s": round(time.time() - started_at, 3) if started_at else 0.0,
     }
+
+
+@router.get("/ready", tags=["meta"])
+def ready() -> JSONResponse:
+    """就绪探针：数据库、ffmpeg/ffprobe、数据目录都可用才返回 200。
+
+    返回 503 时应先摘流量：此时新建任务必然失败或产物写不进去。
+    """
+    settings = get_settings()
+    checks = {
+        "database": ping(),
+        "ffmpeg": shutil.which(settings.ffmpeg) is not None,
+        "ffprobe": shutil.which(settings.ffprobe) is not None,
+        "data_dir": _writable(settings.data_dir),
+    }
+    ok = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={"status": "ready" if ok else "degraded", "checks": checks, "version": __version__},
+    )
+
+
+def _writable(path: Path) -> bool:
+    """用一次真实写入判断目录可写（比检查权限位可靠）。"""
+    probe = path / ".ready_probe"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
 
 
 @router.get("/catalog", tags=["meta"])
@@ -135,6 +179,7 @@ def catalog(db: Session = Depends(get_db)) -> dict[str, Any]:
     voices = db.scalars(select(Voice).order_by(Voice.created_at)).all()
     media = db.scalars(select(Media).order_by(desc(Media.created_at)).limit(10)).all()
     return {
+        "version": __version__,
         "voices": [_voice_out(v) for v in voices],
         "media": [_media_out(m) for m in media],
         "demo": {
@@ -145,8 +190,7 @@ def catalog(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "[周野] 那不如现场试一下，用三种音色念同一句话。"
             ),
             "dubbing": (
-                "这是一段自动生成的配音。我们先把文案合成成语音，"
-                "再按原视频的时长做时间伸缩，最后替换掉原来的音轨。"
+                "这是一段自动生成的配音。我们先把文案合成成语音，再按原视频的时长做时间伸缩，最后替换掉原来的音轨。"
             ),
             "audiobook": {
                 "title": "第一章 · 声音的形状",
@@ -256,7 +300,9 @@ def clone_voice(body: VoiceCloneRequest, db: Session = Depends(get_db)) -> dict[
 
 
 @router.get("/voices/{voice_id}/preview", tags=["voices"])
-def preview_voice(voice_id: str, text: str = Query(default="你好，我是你的配音助手。", max_length=60), db: Session = Depends(get_db)) -> FileResponse:
+def preview_voice(
+    voice_id: str, text: str = Query(default="你好，我是你的配音助手。", max_length=60), db: Session = Depends(get_db)
+) -> FileResponse:
     voice = db.get(Voice, voice_id)
     if voice is None:
         raise HTTPException(404, "音色不存在")
@@ -265,7 +311,9 @@ def preview_voice(voice_id: str, text: str = Query(default="你好，我是你�
 
     out = settings.work_dir / f"preview_{voice.id}.wav"
     synthesize(text, out, VoiceSpec(pitch=voice.pitch, speed=voice.speed, timbre=voice.timbre))
-    return FileResponse(out, media_type="audio/wav", filename=f"preview_{voice.id}.wav", content_disposition_type="inline")
+    return FileResponse(
+        out, media_type="audio/wav", filename=f"preview_{voice.id}.wav", content_disposition_type="inline"
+    )
 
 
 @router.delete("/voices/{voice_id}", status_code=204, tags=["voices"])
@@ -402,7 +450,9 @@ def create_audiobook_job(body: AudiobookJobRequest, db: Session = Depends(get_db
 
 
 @router.get("/jobs", tags=["jobs"])
-def list_jobs(status: str | None = None, limit: int = Query(30, le=200), db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_jobs(
+    status: str | None = None, limit: int = Query(30, le=200), db: Session = Depends(get_db)
+) -> dict[str, Any]:
     stmt = select(Job).order_by(desc(Job.created_at)).limit(limit)
     if status:
         stmt = stmt.where(Job.status == status)
@@ -444,13 +494,8 @@ def delete_job(job_id: str, db: Session = Depends(get_db)) -> None:
     if job.status in {"running", "queued"}:
         raise HTTPException(409, "任务未结束，先取消再删除")
     settings = get_settings()
-    target = settings.media_dir / job_id
-    if target.exists():
-        for path in sorted(target.rglob("*"), reverse=True):
-            try:
-                path.unlink() if path.is_file() else path.rmdir()
-            except OSError:
-                pass
+    # 产物与中间文件都在 media/<job_id>/ 下，整目录清理最稳（逐个删会残留空目录）
+    shutil.rmtree(settings.media_dir / job_id, ignore_errors=True)
     db.delete(job)
     db.commit()
 
@@ -495,7 +540,9 @@ def metrics(db: Session = Depends(get_db)) -> dict[str, Any]:
             "running": sum(1 for job in jobs if job.status == "running"),
             "success_rate": round(len(done) / len(jobs), 3) if jobs else None,
             "avg_duration_ms": int(sum(durations) / len(durations)) if durations else None,
-            "by_kind": {kind: sum(1 for job in jobs if job.kind == kind) for kind in ("dialogue", "dubbing", "audiobook")},
+            "by_kind": {
+                kind: sum(1 for job in jobs if job.kind == kind) for kind in ("dialogue", "dubbing", "audiobook")
+            },
         },
         "audio": {
             "outputs": sum(1 for asset in assets if asset.kind == "audio"),
