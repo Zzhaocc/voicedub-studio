@@ -1,7 +1,7 @@
 # VoiceDub Studio · AI 配音工作台
 
-> 一句话描述出一个音色，写完稿子就得到成品：多角色对白、视频配音、有声书。
-> 服务端可运行，内置离线语音引擎，**不需要 GPU、模型权重或 API key**。
+> 服务端配音工作台：声音设计、音色克隆、多角色对白、视频配音、有声书。
+> 内置离线语音引擎，不需要 GPU、模型权重或 API key。
 
 [![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.13-3776AB?style=flat-square)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square)](https://fastapi.tiangolo.com/)
@@ -91,7 +91,7 @@ python scripts/demo.py      # 对白 → 视频配音 → 有声书，打印每�
 逐句合成后按顺序拼接（句间 0.25s 静音），时间轴由**实际音频时长**回算，
 所以字幕与音频不会漂移。不同角色可以绑定不同音色。
 
-### 2. 视频配音（本项目最有意思的一段）
+### 2. 视频配音（时长对齐）
 
 原视频 8 秒，新配音只有 6.1 秒，怎么办？不是截断，而是做时间伸缩：
 
